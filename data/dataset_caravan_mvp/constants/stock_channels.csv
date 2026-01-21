@@ -1,0 +1,3 @@
+channel,cost_per_unit,life_weeks,unit_decay,avg_units_target,max_units,calibration_mode,initial_active_units
+# life_weeks=0 => no hard expiration, only smooth decay via unit_decay (recommended for MVP)
+car,7838,0,0.995,157,,monthly_mean,157
