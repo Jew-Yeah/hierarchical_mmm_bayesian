@@ -70,6 +70,10 @@ def load_dataset(
     return out
 
 
+from typing import Dict, Any, List, Optional
+import pandas as pd
+
+
 def build_stock_channel_configs(
     stock_constants: pd.DataFrame,
     present_stock_channels: List[str],
@@ -77,9 +81,12 @@ def build_stock_channel_configs(
     """Convert constants table -> per-channel config dict.
 
     Returned dict keys are channel names (e.g. "car"). Values are dicts accepted by
-    core.fit_stock_channels.stage_fit_stock_channels().
+    core.fit_stock_channels (active units reconstruction).
 
-    Missing fields are left as None so CLI can fill them in.
+    Notes:
+    - canonical field name: initial_active_units
+    - we also expose aliases: initial_units, units_start (for backward compatibility)
+    - unit_decay is also exposed as decay (alias expected by some implementations)
     """
 
     # defaults (MVP)
@@ -96,10 +103,19 @@ def build_stock_channel_configs(
     cfg: Dict[str, Dict[str, Any]] = {ch: dict(defaults) for ch in present_stock_channels}
 
     if stock_constants is None or stock_constants.empty:
+        # add aliases anyway
+        for ch in present_stock_channels:
+            cfg[ch]["decay"] = cfg[ch]["unit_decay"]
+            cfg[ch]["initial_units"] = cfg[ch]["initial_active_units"]
+            cfg[ch]["units_start"] = cfg[ch]["initial_active_units"]
         return cfg
 
     df = stock_constants.copy()
     if "channel" not in df.columns:
+        for ch in present_stock_channels:
+            cfg[ch]["decay"] = cfg[ch]["unit_decay"]
+            cfg[ch]["initial_units"] = cfg[ch]["initial_active_units"]
+            cfg[ch]["units_start"] = cfg[ch]["initial_active_units"]
         return cfg
 
     df["channel"] = df["channel"].astype(str).str.strip().str.lower()
@@ -130,15 +146,33 @@ def build_stock_channel_configs(
 
         cfg[ch]["cost_per_unit"] = _get_float("cost_per_unit")
         cfg[ch]["life_weeks"] = _get_int("life_weeks", defaults["life_weeks"])
+
         ud = _get_float("unit_decay")
         cfg[ch]["unit_decay"] = float(ud) if ud is not None else defaults["unit_decay"]
+
         cfg[ch]["avg_units_target"] = _get_float("avg_units_target")
         cfg[ch]["max_units"] = _get_float("max_units")
+
         cm = r.get("calibration_mode", defaults["calibration_mode"])
         cfg[ch]["calibration_mode"] = str(cm).strip() if cm is not None else defaults["calibration_mode"]
-        cfg[ch]["initial_active_units"] = _get_float("initial_active_units")
+
+        # canonical initial units
+        init = _get_float("initial_active_units")
+        if init is None:
+            # accept alternative column names if present in constants table
+            init = _get_float("initial_units")
+        if init is None:
+            init = _get_float("units_start")
+        cfg[ch]["initial_active_units"] = init
+
+    # --- expose aliases expected by fit_stock_channels implementations ---
+    for ch in present_stock_channels:
+        cfg[ch]["decay"] = cfg[ch]["unit_decay"]
+        cfg[ch]["initial_units"] = cfg[ch]["initial_active_units"]
+        cfg[ch]["units_start"] = cfg[ch]["initial_active_units"]
 
     return cfg
+
 
 
 def register_dataset_loader(name: str):
