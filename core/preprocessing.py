@@ -58,13 +58,20 @@ def load_dataset(
         return _CACHE[key]
 
     loader = _DATASET_LOADERS.get(dataset_name)
-    if loader is None:
-        raise ValueError(
-            f"Unknown dataset_name='{dataset_name}'. "
-            f"Known: {sorted(_DATASET_LOADERS.keys())}"
-        )
 
-    out = loader(data_root=Path(data_root), dataset_name=dataset_name)
+    if loader is None:
+        # fallback: если папка датасета существует — пробуем универсальный загрузчик
+        dataset_dir = (Path(data_root) / dataset_name)
+        if dataset_dir.exists() and dataset_dir.is_dir():
+            out = _load_dataset_generic(data_root=Path(data_root), dataset_name=dataset_name, require_stock=False)
+        else:
+            raise ValueError(
+                f"Unknown dataset_name='{dataset_name}'. "
+                f"Known: {sorted(_DATASET_LOADERS.keys())}"
+            )
+    else:
+        out = loader(data_root=Path(data_root), dataset_name=dataset_name)
+
     if use_cache:
         _CACHE[key] = out
     return out
@@ -182,13 +189,7 @@ def register_dataset_loader(name: str):
         return fn
     return _wrap
 
-
-# ----------------------------
-# Dataset: dataset_caravan_mvp
-# ----------------------------
-
-@register_dataset_loader("dataset_caravan_mvp")
-def _load_dataset_caravan_mvp(data_root: Path, dataset_name: str) -> Dict[str, Any]:
+def _load_dataset_generic(data_root: Path, dataset_name: str, require_stock: bool = False) -> Dict[str, Any]:
     dataset_dir = (data_root / dataset_name).resolve()
     _assert_exists(dataset_dir, f"Dataset folder not found: {dataset_dir}")
 
@@ -197,14 +198,22 @@ def _load_dataset_caravan_mvp(data_root: Path, dataset_name: str) -> Dict[str, A
     demand_dir = dataset_dir / "demand_weekly"
 
     _assert_exists(flow_dir, f"Missing folder: {flow_dir}")
-    _assert_exists(stock_dir, f"Missing folder: {stock_dir}")
     _assert_exists(demand_dir, f"Missing folder: {demand_dir}")
 
-    flow_weekly = _load_weekly_channel_folder(flow_dir, kind="flow")
-    stock_weekly = _load_weekly_channel_folder(stock_dir, kind="stock")
+    # flow обязателен
+    flow_weekly = _load_weekly_channel_folder(flow_dir, kind="flow", allow_empty=False)
+
+    # stock может отсутствовать или быть пустым (например Synthetic-Three-Flow-Adstock)
+    if stock_dir.exists():
+        stock_weekly = _load_weekly_channel_folder(
+            stock_dir, kind="stock", allow_empty=(not require_stock)
+        )
+    else:
+        stock_weekly = {} if not require_stock else _assert_exists(stock_dir, f"Missing folder: {stock_dir}")
+
     demand_weekly = _load_wordstat_weekly(demand_dir / "wordstat_dynamic.csv")
 
-    # Optional constants (variant 1): data/<dataset>/constants/stock_channels.csv
+    # Optional constants
     constants_dir = dataset_dir / "constants"
     stock_constants_path = constants_dir / "stock_channels.csv"
     if stock_constants_path.exists():
@@ -213,34 +222,44 @@ def _load_dataset_caravan_mvp(data_root: Path, dataset_name: str) -> Dict[str, A
         stock_constants = pd.DataFrame()
 
     combined_weekly = _build_combined_weekly(flow_weekly, stock_weekly, demand_weekly)
-
-    # basic integrity checks (hard fail early)
     _validate_weekly_index(combined_weekly)
 
     return {
         "dataset_name": dataset_name,
         "dataset_dir": str(dataset_dir),
-        "flow_weekly": flow_weekly,     # dict[channel -> df]
-        "stock_weekly": stock_weekly,   # dict[channel -> df]
+        "flow_weekly": flow_weekly,
+        "stock_weekly": stock_weekly,
         "present_stock_channels": sorted(list(stock_weekly.keys())),
         "stock_constants": stock_constants,
-        "demand_weekly": demand_weekly, # df
-        "combined_weekly": combined_weekly,  # df
+        "demand_weekly": demand_weekly,
+        "combined_weekly": combined_weekly,
         "weeks": combined_weekly["week_start"].tolist(),
     }
+
+
+# ----------------------------
+# Dataset: dataset_caravan_mvp
+# ----------------------------
+
+@register_dataset_loader("dataset_caravan_mvp")
+def _load_dataset_caravan_mvp(data_root: Path, dataset_name: str) -> Dict[str, Any]:
+    return _load_dataset_generic(data_root=data_root, dataset_name=dataset_name, require_stock=True)
+
 
 
 # ----------------------------
 # Helpers: reading files
 # ----------------------------
 
-def _load_weekly_channel_folder(folder: Path, kind: str) -> Dict[str, pd.DataFrame]:
+def _load_weekly_channel_folder(folder: Path, kind: str, allow_empty: bool = False) -> Dict[str, pd.DataFrame]:
     """
     Reads all *.csv in folder as separate channels.
     Returns dict: channel_name -> weekly df.
     """
     files = sorted(folder.glob("*.csv"))
     if not files:
+        if allow_empty:
+            return {}
         raise ValueError(f"No CSV files found in {folder}")
 
     out: Dict[str, pd.DataFrame] = {}
@@ -249,6 +268,7 @@ def _load_weekly_channel_folder(folder: Path, kind: str) -> Dict[str, pd.DataFra
         df = _read_weekly_channel_csv(fp)
         out[channel] = df
     return out
+
 
 
 def _read_weekly_channel_csv(path: Path) -> pd.DataFrame:
