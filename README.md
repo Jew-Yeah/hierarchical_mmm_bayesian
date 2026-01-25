@@ -72,7 +72,7 @@ Y = a · ln(1 + b · X)
 - core/ — ядро (preprocessing, context_builder, seasonality, fit_* модели)
 - pipelines/ — сценарии запуска (например, forecast_channel)
 - data/ — датасеты (каждый датасет отдельной папкой)
-- outputs/ — картинки и результаты
+- save_images/ — картинки и результаты
 
 ---
 
